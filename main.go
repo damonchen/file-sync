@@ -85,6 +85,8 @@ func server() {
 		io.Copy(f, file)
 	})
 
+	logger.Infof("保存文件路径:%s", configData.SavePath)
+
 	logger.Critical(http.ListenAndServe(configData.Port, nil))
 }
 
