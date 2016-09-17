@@ -24,13 +24,21 @@ type Config struct {
 
 var (
 	logger     = logging.MustGetLogger("file-sync")
+	verbose    bool
 	configFile string
 	configData Config
 	fileName   string // client端指定上传文件名
 	filePath   string // client端指定服务器上的名称
 )
 
+func verboseInfo(format string, msg ...interface{}) {
+	if verbose {
+		logger.Debugf(format, msg...)
+	}
+}
+
 func SendString(writer io.Writer, v string) error {
+	verboseInfo("will send string %s", v)
 	var length int64 = int64(len(v))
 	err := binary.Write(writer, binary.BigEndian, &length)
 	if err != nil {
@@ -48,7 +56,8 @@ func RecvString(reader io.Reader) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	logger.Debugf("length %d", length)
+
+	verboseInfo("recv remote string length %d", length)
 
 	data := make([]byte, length)
 	_, err = reader.Read(data)
@@ -104,12 +113,15 @@ func (f *File) send() error {
 }
 
 func initConfig() error {
+
+	verboseInfo("start read config file %s", configFile)
 	data, err := ioutil.ReadFile(configFile)
 	if err != nil {
 		logger.Errorf("open %s file error %s", configFile, err)
 		return err
 	}
 
+	verboseInfo("unmarshal data to config json")
 	err = json.Unmarshal(data, &configData)
 	if err != nil {
 		logger.Errorf("unmarshal json file error %s", err)
@@ -150,6 +162,8 @@ func newClient(conn net.Conn) {
 	}
 
 	defer f.Close()
+
+	verboseInfo("will copy file from network to %s", saveFile)
 	_, err = io.Copy(f, conn)
 	if err != nil {
 		logger.Errorf("copy data error %s", err)
@@ -157,6 +171,7 @@ func newClient(conn net.Conn) {
 	}
 
 	go func(fileName string) {
+		verboseInfo("will calc file %s md5 after 1 second later", fileName)
 		time.Sleep(time.Duration(1) * time.Second)
 		calcMd5(fileName)
 	}(fileName)
@@ -165,6 +180,7 @@ func newClient(conn net.Conn) {
 }
 
 func server() {
+	logger.Infof("will listen %s", configData.Port)
 	ln, err := net.Listen("tcp", configData.Port)
 	if err != nil {
 		logger.Errorf("server net dial error %s", err)
@@ -181,51 +197,12 @@ func server() {
 		go newClient(conn)
 	}
 
-	//	http.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
-	//		logger.Info("new upload coming")
-
-	//		err := r.ParseMultipartForm(32 << 20)
-	//		if err != nil {
-	//			logger.Errorf("parse multipart form error %s", err)
-	//			return
-	//		}
-
-	//		file, handler, err := r.FormFile("uploadfile")
-	//		if err != nil {
-	//			logger.Errorf("upload file error %s", err)
-	//			return
-	//		}
-	//		defer file.Close()
-
-	//		fmt.Fprintf(w, "%v", handler.Header)
-
-	//		filePath := r.FormValue("filePath")
-
-	//		ext := filepath.Ext(handler.Filename)
-	//		name := time.Now().Format("2006-01-02") + ext
-
-	//		saveFile := configData.SavePath + "/" + filePath + "/" + name
-	//		saveFile = filepath.Clean(saveFile)
-
-	//		logger.Infof("will save file %s", saveFile)
-	//		f, err := os.OpenFile(saveFile, os.O_WRONLY|os.O_CREATE, 0666)
-	//		if err != nil {
-	//			logger.Errorf("upload file when save file error %s", err)
-	//			return
-	//		}
-
-	//		defer f.Close()
-	//		io.Copy(f, file)
-	//	})
-
-	//	logger.Infof("保存文件路径:%s", configData.SavePath)
-
-	//	logger.Critical(http.ListenAndServe(configData.Port, nil))
 }
 
 func client() {
 
 	address := configData.Server + configData.Port
+	verboseInfo("connect to remote address %s", address)
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
 		logger.Errorf("client connection error %s", err)
@@ -236,79 +213,36 @@ func client() {
 	file := File{conn: conn}
 	file.FileName = fileName
 	file.FilePath = filePath
+
+	verboseInfo("client fileName %s, filePath %s", fileName, filePath)
+
 	err = file.send()
 	if err != nil {
 		logger.Errorf("file send error %s", err)
 		return
 	}
+	logger.Info("file send complete")
 	return
-
-	//	bodyBuff := &bytes.Buffer{}
-	//	bodyWriter := multipart.NewWriter(bodyBuff)
-
-	//	fileWriter, err := bodyWriter.CreateFormFile("uploadfile", fileName)
-	//	if err != nil {
-	//		logger.Errorf("create upload file error %s", err)
-	//		return
-	//	}
-
-	//	fh, err := os.Open(fileName)
-	//	if err != nil {
-	//		logger.Errorf("could not open file %s", err)
-	//		return
-	//	}
-	//	defer fh.Close()
-
-	//	_, err = io.Copy(fileWriter, fh)
-	//	if err != nil {
-	//		logger.Errorf("copy data to file writer error %s", err)
-	//		return
-	//	}
-
-	//	fieldWriter, err := bodyWriter.CreateFormField("filePath")
-	//	if err != nil {
-	//		logger.Errorf("create field writer error %s", err)
-	//		return
-	//	}
-
-	//	fieldWriter.Write([]byte(filePath))
-
-	//	bodyWriter.Close()
-
-	//	contentType := bodyWriter.FormDataContentType()
-	//	targetURL := "http://" + configData.Server + configData.Port + "/upload"
-	//	resp, err := http.Post(targetURL, contentType, bodyBuff)
-	//	if err != nil {
-	//		logger.Errorf("post data error %s", err)
-	//		return
-	//	}
-	//	defer resp.Body.Close()
-
-	//	data, err := ioutil.ReadAll(resp.Body)
-	//	if err != nil {
-	//		logger.Errorf("read response data error %s", err)
-	//		return
-	//	}
-
-	//	logger.Infof("respone status %s", resp.Status)
-	//	logger.Info(string(data))
-	//	return
 }
 
 func main() {
 	flag.StringVar(&configFile, "configFile", "", "config file")
 	flag.StringVar(&fileName, "fileName", "", "upload filename")
 	flag.StringVar(&filePath, "filePath", "", "filepath")
+	flag.BoolVar(&verbose, "v", false, "verbose")
 	flag.Parse()
 
+	verboseInfo("start parse config file %s", configFile)
 	err := initConfig()
 	if err != nil {
 		return
 	}
 
 	if configData.Server == "" {
+		verboseInfo("running at server model")
 		server()
 	} else {
+		verboseInfo("running at client model")
 		client()
 	}
 }
